@@ -571,9 +571,9 @@ def gen_goal_shape(name, h, w, font_name='helvetica_thin'):
     goal = (goal <= 0.5).astype(np.uint8)
     goal_dist = np.minimum(cv2.distanceTransform(1-goal, cv2.DIST_L2, 5), 1e4)
     goal_img = (goal * 255)[..., None].repeat(3, axis=-1).astype(np.uint8)
-    # plt.subplot(1,2,1)
+    # plt.subplot(1,3,2)
     # plt.imshow(goal)
-    # plt.subplot(1,2,2)
+    # plt.subplot(1,3,3)
     # plt.imshow(goal_dist)
     # plt.show()
     return goal_dist, goal_img

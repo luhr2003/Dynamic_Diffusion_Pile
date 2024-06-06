@@ -40,7 +40,7 @@ public:
 		float sing_y = ptr[17];
 		float sing_z = ptr[18];
 		float add_noise_ft = ptr[19];
-		float radius = 0.075f;
+		float radius = ptr[20];
 		
 		float pos_noise = pos_diff*0.5f;
 		int draw_skin = (int) draw_skin_ft;
@@ -81,8 +81,8 @@ public:
 						float y_noise = 0.0;
 						float z_noise = 0.0;
 						if (add_noise) {
-							x_noise = static_cast <float> (rand()) / static_cast <float> (RAND_MAX) * 2 * pos_noise - pos_noise;
-							y_noise = static_cast <float> (rand()) / static_cast <float> (RAND_MAX) * 2 * pos_noise - pos_noise;
+							x_noise = static_cast <float> (rand()) / static_cast <float> (RAND_MAX) * 8 * pos_noise - pos_noise;
+							y_noise = static_cast <float> (rand()) / static_cast <float> (RAND_MAX) * 8 * pos_noise - pos_noise;
 							z_noise = static_cast <float> (rand()) / static_cast <float> (RAND_MAX) * 2 * pos_noise - pos_noise;
 						}
 						CreateParticleShape(m, Vec3(x+float(x_idx)*pos_diff+x_noise, y+float(y_idx)*pos_diff+y_noise, z+float(z_idx)*pos_diff+z_noise), scale, 0.0f, radius*1.001f, 0.0f, 0.2f, true, 0.8f, NvFlexMakePhase(group++, 0), true, radius*0.1f, 0.0f, 0.0f, Vec4(237.0f/255.0f, 145.0f/255.0f, 33.0f/255.0f, 1.0f));

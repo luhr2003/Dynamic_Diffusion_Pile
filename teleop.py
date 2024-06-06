@@ -41,7 +41,8 @@ def pixel_to_world(pixel_coordinates, depth, camera_intrinsics, camera_extrinsic
         return world_point[:3]
 
 
-def teleoperation(img,env:FlexEnv):
+def teleoperation(env:FlexEnv):
+    img=env.render().reshape(env.screenHeight,env.screenWidth,5)
     # 创建一个空列表，用于存储点击的点
     coords = []
     rgb=img[:,:,:3].astype(np.int32)
@@ -70,7 +71,37 @@ def teleoperation(img,env:FlexEnv):
     begin=begin*env.global_scale
     end=end*env.global_scale
     print(f'begin:{begin},end:{end}')
+    raw_obs,state,particle_r=env.get_process_observation()
     env.step([begin[0],begin[2],end[0],end[2]])
+    action=[begin[0],begin[2],end[0],end[2]]
+    return raw_obs,state,particle_r,action
+
+def save_obs(env:FlexEnv):
+    obs=env.render()
+    assert type(obs) == np.ndarray
+    assert obs.shape[-1] == 5
+    assert obs[..., :3].max() <= 255.0
+    assert obs[..., :3].min() >= 0.0
+    assert obs[..., :3].max() >= 1.0
+    assert obs[..., -1].max() >= 0.7 * env.global_scale
+    assert obs[..., -1].max() <= 0.8 * env.global_scale
+    
+
+    depth = obs[..., -1] / env.global_scale
+    rgb_mask=(depth<0.599/0.8).astype(np.int32)
+    mask=(depth<0.599/0.8).astype(np.int32)
+    # mask=np.ones((self.screenHeight,self.screenWidth))
+    # crop width >600
+    mask[290:460,510:]=0
+    rgb=obs[..., :3].astype(np.uint8)
+    # set mask area to black
+    rgb[rgb_mask==0]=255
+    # show rgb
+    fig, ax = plt.subplots()
+    ax.imshow(rgb)
+    plt.savefig('obs.png')
+    plt.show()
+
 
 def main():
     config = load_yaml("config/mpc/config.yaml")
@@ -119,9 +150,12 @@ def main():
     env.reset()
 
     funnel_dist = np.zeros_like(subgoal)
+    for j in range(200):
+        pyflex.step()
+        pyflex.render()
     while(1):
-        cur_img=env.render().reshape(screenHeight,screenWidth,5)
-        teleoperation(cur_img,env)
+        teleoperation(env)
+        save_obs(env)
     
 
 

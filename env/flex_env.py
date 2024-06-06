@@ -18,6 +18,7 @@ from planners import PlannerGD
 from env.flex_rewards import config_reward, config_reward_ptcl
 import matplotlib.pyplot as plt
 import math
+import open3d as o3d
 
 from scipy.special import softmax
 from model.res_regressor import MPCResRgrNoPool
@@ -57,6 +58,9 @@ def proc_obs(obs, config, res=64):
     assert obs[..., :3].max() >= 1.0
     assert obs[..., -1].max() >= 0.7 * global_scale
     assert obs[..., -1].max() <= 0.8 * global_scale
+
+    # crop to 540*540
+    # obs = obs[90:630, 90:630]
 
     obs[..., :3] = obs[..., :3][..., ::-1] / 255.
     obs[..., -1] = obs[..., -1] / (global_scale)
@@ -158,7 +162,7 @@ pyflex.resetJointState = FlexRobotHelper.resetJointState
 pyflex.getRobotShapeStates = FlexRobotHelper.getRobotShapeStates
 
 class FlexEnv(gym.Env):
-    def __init__(self, config=None) -> None:
+    def __init__(self, config=None,path=None) -> None:
         super().__init__()
         
         self.is_real = False
@@ -215,7 +219,13 @@ class FlexEnv(gym.Env):
         self.act_dim = 4
 
     def robot_to_shape_states(self, robot_states):
-        return np.concatenate([self.wall_shape_states, robot_states], axis=0)
+        return np.concatenate([self.wall_shape_states,self.dustpan_shape_state,robot_states], axis=0)
+    
+    def get_process_observation(self):
+        raw_obs=self.render()
+        state,particle_r = self.obs2ptcl_fixed_num_batch(raw_obs, 30, batch_size=30)
+        return raw_obs,state,particle_r
+
 
     def reset_panda(self, jointPositions = np.zeros(9).tolist()):
         index = 0
@@ -404,7 +414,7 @@ class FlexEnv(gym.Env):
         reg_label = np.zeros(n)
         return centers
 
-    def reset(self):
+    def reset(self,initx, initz, initbolb):
         if self.obj == 'coffee':
             scale = 0.2 * self.global_scale / 8.0
             x = -0.9 * self.global_scale / 8.0
@@ -611,10 +621,10 @@ class FlexEnv(gym.Env):
                 add_sing_z = -1
                 add_noise = 0.0
             elif self.init_pos == 'rand_spread':
-                rand_scale = np.random.uniform(0.09, 0.12) * self.global_scale / 8.0
+                rand_scale = 0.11 * self.global_scale / 8.0
                 max_scale = rand_scale
                 min_scale = rand_scale
-                blob_r = np.random.uniform(0.7, 1.0)
+                blob_r = initbolb
                 x = - blob_r * self.global_scale / 8.0
                 y = 0.5
                 z = - blob_r * self.global_scale / 8.0
@@ -622,10 +632,13 @@ class FlexEnv(gym.Env):
                 num_x = int(abs(x/1.5) / max_scale + 1) * 2
                 num_y = 10
                 num_z = int(abs(z/1.5) / max_scale + 1) * 2
-                x_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                z_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                x += x_off
-                z += z_off
+                # x_off = np.random.uniform(-3,1)
+                # z_off = np.random.uniform(-3,3)
+                # x += x_off
+                # z += z_off
+                # x-=1
+                x+=initx
+                z+=initz
                 num_carrots = num_x * num_z - 1
                 add_singular = 0.0
                 add_sing_x = -1
@@ -794,361 +807,11 @@ class FlexEnv(gym.Env):
                                           add_sing_x,
                                           add_sing_y,
                                           add_sing_z,
-                                          add_noise,])
+                                          add_noise,
+                                          0.075])
             pyflex.set_scene(22, self.scene_params, temp.astype(np.float64), temp, temp, temp, temp, 0)
-            # for j in range(500):
-            #     pyflex.step()
-            #     pyflex.render()
-        elif self.obj == 'carrots_dustpan':
-            staticFriction = 1.0
-            dynamicFriction = 0.9
-            draw_skin = 1.0
-            min_dist = 10.0
-            max_dist = 20.0
-            self.cvx_region = np.zeros((1,4)) # every row: left, right, bottom, top
-            self.cvx_region[0,0] = -self.wkspc_w
-            self.cvx_region[0,1] = self.wkspc_w
-            self.cvx_region[0,2] = -self.wkspc_w
-            self.cvx_region[0,3] = self.wkspc_w
-            if self.init_pos == 'spread':
-                max_scale = 0.1 * self.global_scale / 8.0
-                min_scale = 0.1 * self.global_scale / 8.0
-                x = -1.5 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.5 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2 + 1
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2 + 1
-                num_carrots = (num_x * num_z - 1) * 3
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'wkspc_spread':
-                max_scale = 0.2 * self.global_scale / 8.0
-                min_scale = 0.2 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = num_x * num_z - 1
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'wkspc_spread_double':
-                max_scale = 0.2 * self.global_scale / 8.0
-                min_scale = 0.2 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = 2 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'wkspc_spread_triple':
-                max_scale = 0.2 * self.global_scale / 8.0
-                min_scale = 0.2 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = 3 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'wkspc_spread_4':
-                max_scale = 0.2 * self.global_scale / 8.0
-                min_scale = 0.2 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = 4 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'extra_large_wkspc_spread':
-                max_scale = 0.3 * self.global_scale / 8.0
-                min_scale = 0.3 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale) * 2
-                num_carrots = 2 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'extra_small_wkspc_spread':
-                max_scale = 0.09 * self.global_scale / 8.0
-                min_scale = 0.09 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = 4 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'extra_small_half_spread':
-                max_scale = 0.09 * self.global_scale / 8.0
-                min_scale = 0.09 * self.global_scale / 8.0
-                x = -0.9 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.9 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = 4 * (num_x * num_z - 1)
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'rand_blob':
-                rand_scale = np.random.uniform(0.07, 0.12) * self.global_scale / 8.0
-                max_scale = rand_scale
-                min_scale = rand_scale
-                blob_r = np.random.uniform(0.3, 0.5)
-                x = -blob_r * self.global_scale / 8.0
-                y = 0.5
-                z = -blob_r * self.global_scale / 8.0
-                inter_space = max_scale
-                num_x = int(abs(x) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z) / max_scale) * 2
-                x_off = self.global_scale * np.random.uniform(-1./12., 1./8.)
-                z_off = self.global_scale * np.random.uniform(-1./12., 1./8.)
-                x += x_off
-                z += z_off
-                print('rand_scale: ', rand_scale)
-                print('blob_r: ', blob_r)
-                print('x_off: ', x_off)
-                print('z_off: ', z_off)
-                num_carrots = (num_x * num_z - 1) * 3
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'rand_spread':
-                rand_scale = np.random.uniform(0.09, 0.12) * self.global_scale / 8.0
-                max_scale = rand_scale
-                min_scale = rand_scale
-                blob_r = np.random.uniform(0.7, 1.0)
-                x = - blob_r * self.global_scale / 8.0
-                y = 0.5
-                z = - blob_r * self.global_scale / 8.0
-                inter_space = 1.5 * max_scale
-                num_x = int(abs(x/1.5) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/1.5) / max_scale + 1) * 2
-                x_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                z_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                x += x_off
-                z += z_off
-                num_carrots = num_x * num_z - 1
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'rand_sparse_spread':
-                rand_scale = 0.12 * self.global_scale / 8.0
-                max_scale = rand_scale
-                min_scale = rand_scale
-                blob_r = np.random.uniform(1.0, 1.5)
-                x = - blob_r * self.global_scale / 8.0
-                y = 0.5
-                z = - blob_r * self.global_scale / 8.0
-                inter_space = max_scale * 2
-                num_x = int(abs(x/2.) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale) * 2
-                # x_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                # z_off = self.global_scale * np.random.uniform(-1./24., 1./24.)
-                # x += x_off
-                # z += z_off
-                num_carrots = (num_x * num_z - 1) * 1
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'rb_corner':
-                max_scale = 0.12 * self.global_scale / 8.0
-                min_scale = 0.12 * self.global_scale / 8.0
-                x = -0.4 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.4 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale
-                num_x = int(abs(x) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z) / max_scale) * 2
-                x += self.global_scale / 8.
-                z += self.global_scale / 8.
-                num_carrots = (num_x * num_z - 1) * 3
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'center':
-                max_scale = 0.12 * self.global_scale / 8.0
-                min_scale = 0.12 * self.global_scale / 8.0
-                x = -0.4 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.4 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale
-                num_x = int(abs(x) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z) / max_scale) * 2
-                num_carrots = (num_x * num_z - 1) * 3
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'center_init_2':
-                max_scale = 0.12 * self.global_scale / 8.0
-                min_scale = 0.12 * self.global_scale / 8.0
-                x = -1.0 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.0 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale * 2
-                num_x = int(abs(x/2.) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale) * 2
-                num_carrots = (num_x * num_z - 1) * 1
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 1.0
-            elif self.init_pos == 'rt_corner':
-                max_scale = 0.15 * self.global_scale / 8.0
-                min_scale = 0.15 * self.global_scale / 8.0
-                x = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale
-                num_x = int(abs(x) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z) / max_scale) * 2
-                x += self.global_scale / 8.
-                z -= self.global_scale / 8.
-                num_carrots = int(0.25 * self.global_scale / (max_scale ** 2))
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'wkspc_spread_multi_granularity':
-                max_scale = 0.2 * self.global_scale / 8.0
-                min_scale = 0.05 * self.global_scale / 8.0
-                x = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -1.2 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = 2 * max_scale
-                num_x = int(abs(x/2.) / max_scale + 1) * 2
-                num_y = 10
-                num_z = int(abs(z/2.) / max_scale + 1) * 2
-                num_carrots = (num_x * num_z - 1) * 2
-                add_singular = 0.0
-                add_sing_x = -1
-                add_sing_y = -1
-                add_sing_z = -1
-                add_noise = 0.0
-            elif self.init_pos == 'singular':
-                max_scale = 0.15 * self.global_scale / 8.0
-                min_scale = 0.15 * self.global_scale / 8.0
-                x = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale
-                num_x = int(abs(x) / max_scale) * 2
-                num_y = 10
-                num_z = int(abs(z) / max_scale) * 2
-                x -= self.global_scale / 8.
-                num_carrots = int(0.25 * self.global_scale / (max_scale ** 2))
-                add_singular = 1.0
-                add_sing_x = 3.0 * self.global_scale / 24.0
-                add_sing_y = 0.5
-                add_sing_z = 0.0
-                add_noise = 0.0
-            elif self.init_pos == 'blank':
-                max_scale = 0.15 * self.global_scale / 8.0
-                min_scale = 0.15 * self.global_scale / 8.0
-                x = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                y = 0.5
-                z = -0.35 * self.global_scale / 8.0 # -0.35; -1.2
-                inter_space = max_scale
-                num_x = 1
-                num_y = 10
-                num_z = 1
-                x -= self.global_scale
-                num_carrots = 1
-                add_singular = 0.0
-                add_sing_x = 3.0 * self.global_scale / 24.0
-                add_sing_y = 0.5
-                add_sing_z = 0.0
-                add_noise = 0.0
-            else:
-                raise NotImplementedError
-            self.scene_params = np.array([max_scale,
-                                          min_scale,
-                                          x,
-                                          y,
-                                          z,
-                                          staticFriction,
-                                          dynamicFriction,
-                                          draw_skin,
-                                          num_carrots,
-                                          min_dist,
-                                          max_dist,
-                                          num_x,
-                                          num_y,
-                                          num_z,
-                                          inter_space,
-                                          add_singular,
-                                          add_sing_x,
-                                          add_sing_y,
-                                          add_sing_z,
-                                          add_noise,])
-            pyflex.set_scene(22, self.scene_params, 0)
+            print('scene_params: ', self.scene_params)
+            
         elif self.obj == 'coffee_capsule':
             cof_scale = 0.2 * self.global_scale / 8.0
             cof_x = -1.5 * self.global_scale / 8.0
@@ -1196,6 +859,18 @@ class FlexEnv(gym.Env):
             pyflex.add_box(halfEdge, center, quats[i], hideShape, color)
             self.wall_shape_states[i] = np.concatenate([center, center, quats[i], quats[i]])
 
+        pyflex.step()
+        pyflex.render()
+        dustpan_scale=30
+        dustpan_trans=np.array([6.5,0.7,0.25])
+        dustpan_quat=quatFromAxisAngle(np.array([1.,0.,0.]),np.deg2rad(270.))
+        dustpan_color=np.array([204/255,204/255,1.])
+        pyflex.add_mesh("dustpan.obj",dustpan_scale,0,dustpan_color,dustpan_trans,dustpan_quat,False)
+        shape_state=pyflex.get_shape_states()
+        shape_state=shape_state.reshape(-1,14)
+        self.dustpan_shape_state=shape_state[-1]
+        self.dustpan_shape_state=self.dustpan_shape_state.reshape(1,14)
+
         # add robot
         if self.robot_type == 'franka':
             self.robotId = pyflex.loadURDF(self.flex_robot_helper, 'franka_panda/panda.urdf', [-4.5 * self.global_scale / 8.0, 0, 0], [0, 0, 0, 1], globalScaling=self.global_scale)
@@ -1221,6 +896,8 @@ class FlexEnv(gym.Env):
                 dof_idx += 1
         self.last_ee = None
         self.reset_panda()
+        
+
 
     def render(self, no_return=False, add_cam_idx=None):
         # RGB scale: 0-255
@@ -1280,6 +957,32 @@ class FlexEnv(gym.Env):
         sampled_ptcl, particle_r = fps(fgpcd, particle_num)
         sampled_ptcl = recenter(fgpcd, sampled_ptcl, r = min(0.02, 0.5 * particle_r))
         return sampled_ptcl, particle_r
+    
+
+    def convex_hull(self):
+        obs=self.render()
+        depth = obs[..., -1] / self.global_scale
+        depth = obs[..., -1] / self.global_scale
+        rgb_mask=(depth<0.599/0.8).astype(np.int32)
+        mask=(depth<0.599/0.8).astype(np.int32)
+        # mask=np.ones((self.screenHeight,self.screenWidth))
+        # crop width >600
+        mask[290:460,510:]=0
+        rgb=obs[..., :3].astype(np.uint8)
+        # set mask area to black
+        rgb[rgb_mask==0]=0
+        rgb[mask==0]=0
+
+        # show rgb
+        # fig, ax = plt.subplots()
+        # ax.imshow(rgb)
+        # plt.show()
+        # if all in (250,250) (450,450 ) return true
+        nonzero=np.nonzero(rgb)
+        if np.all(nonzero[0]>230) and np.all(nonzero[0]<470) and np.all(nonzero[1]>240) and np.all(nonzero[1]<460):
+            return True
+
+
 
     def obs2ptcl_fixed_num_batch(self, obs, particle_num, batch_size):
         assert type(obs) == np.ndarray
@@ -1289,12 +992,25 @@ class FlexEnv(gym.Env):
         assert obs[..., :3].max() >= 1.0
         assert obs[..., -1].max() >= 0.7 * self.global_scale
         assert obs[..., -1].max() <= 0.8 * self.global_scale
-        depth = obs[..., -1] / self.global_scale
         
+
+        depth = obs[..., -1] / self.global_scale
+        rgb_mask=(depth<0.599/0.8).astype(np.int32)
+        mask=(depth<0.599/0.8).astype(np.int32)
+        # mask=np.ones((self.screenHeight,self.screenWidth))
+        # crop width >600
+        mask[290:460,510:]=0
+        rgb=obs[..., :3].astype(np.uint8)
+        # set mask area to black
+        rgb[rgb_mask==0]=255
+        # show rgb
+        # fig, ax = plt.subplots()
+        # ax.imshow(rgb)
+        # plt.show()
         batch_sampled_ptcl = np.zeros((batch_size, particle_num, 3))
         batch_particle_r = np.zeros((batch_size, ))
         for i in range(batch_size):
-            fgpcd = depth2fgpcd(depth, depth<0.599/0.8, self.get_cam_params())
+            fgpcd = depth2fgpcd(depth, mask, self.get_cam_params())
             fgpcd = downsample_pcd(fgpcd, 0.01)
             sampled_ptcl, particle_r = fps(fgpcd, particle_num)
             batch_sampled_ptcl[i] = recenter(fgpcd, sampled_ptcl, r = min(0.02, 0.5 * particle_r))
@@ -1305,7 +1021,7 @@ class FlexEnv(gym.Env):
                           subgoal,
                           model_dy,
                           init_pos = None,
-                          n_mpc=30,
+                          n_mpc=10,
                           n_look_ahead=1,
                           n_sample=100,
                           n_update_iter=100,
@@ -1394,7 +1110,8 @@ class FlexEnv(gym.Env):
         rollout_time = 0.0
         optim_time = 0.0
         iter_num = 0
-        for i in range(n_mpc):
+
+        for i in range(10):
             attr_cur = np.zeros((obs_cur.shape[0], particle_num))
             init_p = self.get_positions()
             # print('mpc iter: {}'.format(i))
@@ -1474,7 +1191,17 @@ class FlexEnv(gym.Env):
                     action_label_seq_mpc_init = action_label_seq_mpc_init[1:]
 
             print('rewards: {}'.format(rewards))
-            print()
+            # print()
+            # a=input("wait for input")
+            # if a=="break":
+            #     break
+            positions=self.get_positions().reshape(-1,4)[:,:3]
+            # pcd=o3d.geometry.PointCloud()
+            # # pcd.points=o3d.utility.Vector3dVector(positions.reshape(-1,3))
+            # o3d.visualization.draw_geometries([pcd])
+
+            if self.convex_hull():
+                break
         return {'rewards': rewards,
                 'raw_obs': raw_obs,
                 'states': states,
@@ -1512,7 +1239,7 @@ class FlexEnv(gym.Env):
         return np.array(pyflex.get_viewMatrix()).reshape(4, 4).T
     
     def get_positions(self):
-        return pyflex.get_positions()
+        return np.array(pyflex.get_positions())
     
     def set_positions(self, positions):
         pyflex.set_positions(positions)
